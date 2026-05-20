@@ -1,3 +1,5 @@
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::IntoResponse;
 use serde_json::json;
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -8,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     build_http_schema_dump, default_state, escape_html, invoke_method, is_param_validation_error,
     is_session_expired_error, params_to_object, parse_json_params, rpc_handler, type_name,
+    with_cors_headers,
 };
 
 struct EnvVarGuard {
@@ -78,24 +81,24 @@ async fn wait_until_port_released(port: u16) {
     }
 }
 
-/// Regression test for issue #920 — the embedded server's `axum::serve`
+/// Regression test for issue #920 ??the embedded server's `axum::serve`
 /// accept loop must stop within the cancellation timeout when its
 /// `CancellationToken` is fired.
 ///
 /// **Ignored by default.** This test calls `run_server_embedded`,
 /// which triggers the full production bootstrap (`bootstrap_core_runtime`
-/// → `register_domain_subscribers` → `scheduler_gate::init_global` +
+/// ??`register_domain_subscribers` ??`scheduler_gate::init_global` +
 /// `memory::tree::jobs::start` + `composio::start_periodic_sync` +
 /// cron scheduler). Those code paths spawn detached `tokio::spawn`
 /// background tasks and write to several process-global statics
 /// (`STATE: OnceLock`, `SIGNED_OUT: AtomicBool`, `LLM_PERMITS`
 /// semaphore, `GLOBAL_REGISTRY` agent.run_turn handler, `STARTED`
-/// `std::sync::Once`s, …) — *none of which have teardown semantics*.
+/// `std::sync::Once`s, ?? ??*none of which have teardown semantics*.
 /// In a unit-test binary the leaked tasks then race with every other
-/// test, multiplying CI wall time by 10–20× (PR #1552 thread). The
+/// test, multiplying CI wall time by 10??0? (PR #1552 thread). The
 /// right shape for this regression is an integration test in a
 /// dedicated `tests/` binary where global pollution doesn't affect
-/// siblings — tracked as a follow-up.
+/// siblings ??tracked as a follow-up.
 ///
 /// To run manually: `cargo test --lib -p openhuman -- --ignored
 /// shutdown_token`.
@@ -574,7 +577,7 @@ fn is_session_expired_error_matches_401_unauthorized() {
 
 #[test]
 fn is_session_expired_error_requires_both_401_and_unauthorized() {
-    // 401 alone is not sufficient — could be HTTP/3.01 nonsense or
+    // 401 alone is not sufficient ??could be HTTP/3.01 nonsense or
     // unrelated text. We require the string "unauthorized" too.
     assert!(!is_session_expired_error("server returned 401"));
     assert!(!is_session_expired_error("unauthorized without code"));
@@ -609,11 +612,11 @@ fn is_param_validation_error_matches_the_three_validator_shapes() {
     assert!(is_param_validation_error(
         "unknown param 'api_key' for config.update_model_settings"
     ));
-    // `all::validate_params` — missing required field.
+    // `all::validate_params` ??missing required field.
     assert!(is_param_validation_error(
         "missing required param 'session_id': active session identifier"
     ));
-    // `params_to_object` — params field is the wrong JSON shape.
+    // `params_to_object` ??params field is the wrong JSON shape.
     assert!(is_param_validation_error(
         "invalid params: expected object or null, got array"
     ));
@@ -651,15 +654,14 @@ fn is_session_expired_error_matches_missing_backend_session_token() {
     assert!(is_session_expired_error(
         "Web search unavailable: no backend session token. Sign in first so the server can proxy search."
     ));
-    // Case-insensitive match — the helper lowercases first.
+    // Case-insensitive match ??the helper lowercases first.
     assert!(is_session_expired_error("NO BACKEND SESSION TOKEN"));
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn structured_rpc_error_envelope_passes_through_generic_dispatch() {
     // The transport layer must surface any controller-emitted
-    // `StructuredRpcError` payload without inspecting the method name —
-    // this is what makes the boundary domain-agnostic. We register a
+    // `StructuredRpcError` payload without inspecting the method name ??    // this is what makes the boundary domain-agnostic. We register a
     // throwaway method-name on a thread-scoped op and confirm the
     // wire-shape carries the `kind`/`thread_id` data verbatim.
     use axum::body::to_bytes;
@@ -685,8 +687,7 @@ async fn structured_rpc_error_envelope_passes_through_generic_dispatch() {
     let body: serde_json::Value = serde_json::from_slice(&body).expect("json response");
     assert_eq!(body["error"]["data"]["kind"], "ThreadNotFound");
     assert_eq!(body["error"]["data"]["thread_id"], "thread-ghost");
-    // The structured-error message must be human-readable on the wire —
-    // never the encoded sentinel envelope.
+    // The structured-error message must be human-readable on the wire ??    // never the encoded sentinel envelope.
     let message = body["error"]["message"].as_str().expect("error message");
     assert!(
         !message.contains("__OPENHUMAN_STRUCTURED_RPC_ERROR_V1__"),
@@ -871,7 +872,7 @@ async fn invoke_method_rejects_string_params_for_registered_method() {
 async fn invoke_method_accepts_null_params_for_registered_method() {
     // JSON-RPC 2.0 allows omitting params; null must be treated like {}.
     let result = invoke_method(default_state(), "openhuman.health_snapshot", json!(null)).await;
-    // Call should succeed or fail for domain reasons — but must NOT
+    // Call should succeed or fail for domain reasons ??but must NOT
     // fail with the "invalid params" shape error.
     if let Err(e) = result {
         assert!(
@@ -908,3 +909,69 @@ async fn invoke_method_core_version_via_tier1_reflects_state() {
         .expect("core.version should succeed");
     assert_eq!(result, json!({ "version": "0.0.1-abc" }));
 }
+
+#[test]
+fn with_cors_headers_allows_known_tauri_origin_and_sets_vary() {
+    let origin = HeaderValue::from_static("tauri://localhost");
+    let response = with_cors_headers(StatusCode::OK.into_response(), Some(&origin));
+
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("tauri://localhost")
+    );
+    assert!(
+        response
+            .headers()
+            .get_all(header::VARY)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .any(|value| value == "Origin")
+    );
+}
+
+#[test]
+fn with_cors_headers_blocks_disallowed_origin_but_still_varies() {
+    let origin = HeaderValue::from_static("https://evil.example");
+    let response = with_cors_headers(StatusCode::OK.into_response(), Some(&origin));
+
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none()
+    );
+    assert!(
+        response
+            .headers()
+            .get_all(header::VARY)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .any(|value| value == "Origin")
+    );
+}
+
+#[test]
+fn with_cors_headers_honors_env_override() {
+    let _env = EnvVarGuard::set_many(vec![(
+        "OPENHUMAN_CORE_ALLOWED_ORIGINS",
+        OsString::from("https://debug.example"),
+    )]);
+    let origin = HeaderValue::from_static("https://debug.example");
+
+    let response = with_cors_headers(StatusCode::OK.into_response(), Some(&origin));
+
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("https://debug.example")
+    );
+}
+
+
+
+

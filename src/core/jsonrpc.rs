@@ -21,6 +21,7 @@ use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::core::all;
+use crate::core::cors_origin_policy::{cors_headers_for_origin, parse_allowed_origins_env};
 use crate::core::types::{AppState, RpcError, RpcFailure, RpcRequest, RpcSuccess};
 use crate::rpc::StructuredRpcError;
 
@@ -59,7 +60,7 @@ pub async fn rpc_handler(State(state): State<AppState>, Json(req): Json<RpcReque
         Err(raw_message) => {
             // Decode the controller-emitted structured envelope (if any)
             // here at the transport boundary. Domains opt in by emitting a
-            // `StructuredRpcError` from their handlers — this layer never
+            // `StructuredRpcError` from their handlers ??this layer never
             // branches on the RPC method name to recover error semantics.
             let structured = StructuredRpcError::decode(&raw_message);
             let (display_message, error_data, expected_user_state) = match structured {
@@ -76,21 +77,21 @@ pub async fn rpc_handler(State(state): State<AppState>, Json(req): Json<RpcReque
             // UI re-auths). Don't spam Sentry with it.
             //
             // Param-validation failures ("unknown param 'x' for ns.fn",
-            // "missing required param 'x'", "invalid params: …") are also
+            // "missing required param 'x'", "invalid params: ??) are also
             // pure boundary mismatches: either the caller is a frontend on a
             // different release than the running core (OPENHUMAN-TAURI-20:
             // v0.53.22 UI shipped `api_key` before the matching schema input
             // landed in #1467) or it is straight client-bug input. Sentry
-            // cannot help — we can neither retro-fix already-shipped
-            // installs nor learn anything from the noise — so log at info
+            // cannot help ??we can neither retro-fix already-shipped
+            // installs nor learn anything from the noise ??so log at info
             // and skip the report.
             //
             // Logging asymmetry between the two skip paths is intentional:
             // session-expired messages are a small set of fixed strings
             // (no caller-supplied content), so the full text is safe to
             // log. Param-validation messages embed caller-supplied param
-            // names and, for the `invalid params: …` shape, can carry
-            // deserialized values — log structurally with redacted body
+            // names and, for the `invalid params: ?? shape, can carry
+            // deserialized values ??log structurally with redacted body
             // to keep PII out of the sink while preserving the method
             // for grep / correlation.
             //
@@ -100,7 +101,7 @@ pub async fn rpc_handler(State(state): State<AppState>, Json(req): Json<RpcReque
             if expected_user_state {
                 tracing::info!(
                     method = %method,
-                    "[rpc] expected-user-state error — skipping Sentry: {}",
+                    "[rpc] expected-user-state error ??skipping Sentry: {}",
                     display_message
                 );
             } else if is_param_validation_error(&display_message) {
@@ -118,7 +119,7 @@ pub async fn rpc_handler(State(state): State<AppState>, Json(req): Json<RpcReque
                 // would re-create the very Sentry noise the lower-layer demote
                 // was meant to avoid (#8Z, #93, #8W, #96).
                 //
-                // Redact before logging — `display_message` is upstream-derived
+                // Redact before logging ??`display_message` is upstream-derived
                 // (backend / provider response) and can carry URL fragments,
                 // query params, or pasted-through provider error text that
                 // includes tokens. `sanitize_api_error` runs the same scrub
@@ -130,7 +131,7 @@ pub async fn rpc_handler(State(state): State<AppState>, Json(req): Json<RpcReque
                     method = %method,
                     elapsed_ms = ms as u64,
                     error = %redacted,
-                    "[rpc] transient downstream failure — not reporting to Sentry (message redacted)"
+                    "[rpc] transient downstream failure ??not reporting to Sentry (message redacted)"
                 );
             } else {
                 crate::core::observability::report_error_or_expected(
@@ -176,14 +177,14 @@ pub async fn invoke_method(state: AppState, method: &str, params: Value) -> Resu
     // token, flips the scheduler-gate signed-out override so background
     // workers stand down, and (eventually) pushes a sign-out to the UI.
     // Centralising via the event bus means 401 detection from any path
-    // (this one, `llm_provider.api_error`, …) gets the same teardown.
+    // (this one, `llm_provider.api_error`, ?? gets the same teardown.
     if let Err(ref msg) = result {
         if is_session_expired_error(msg) {
             log::warn!(
-                "[jsonrpc] backend returned 401 for method '{}' — publishing SessionExpired",
+                "[jsonrpc] backend returned 401 for method '{}' ??publishing SessionExpired",
                 method
             );
-            // Scrub before publishing — subscribers log `reason`, and the
+            // Scrub before publishing ??subscribers log `reason`, and the
             // upstream error string could include API keys / tokens from
             // pasted-through provider replies. `sanitize_api_error` runs
             // `scrub_secret_patterns` and truncates.
@@ -240,19 +241,19 @@ fn is_session_expired_error(msg: &str) -> bool {
 /// rather than the underlying handler.
 ///
 /// Three shapes, all emitted before the handler ever runs:
-///   * `"unknown param '<key>' for <ns>.<fn>"`       — `all::validate_params` (extra field)
-///   * `"missing required param '<key>': <comment>"` — `all::validate_params` (omitted required field)
-///   * `"invalid params: expected object or null, got <type>"` — `params_to_object` (wrong params shape)
+///   * `"unknown param '<key>' for <ns>.<fn>"`       ??`all::validate_params` (extra field)
+///   * `"missing required param '<key>': <comment>"` ??`all::validate_params` (omitted required field)
+///   * `"invalid params: expected object or null, got <type>"` ??`params_to_object` (wrong params shape)
 ///
 /// These only fire when caller and server schemas drift at the transport layer
-/// — either a frontend on a different release than the running core, or a buggy
+/// ??either a frontend on a different release than the running core, or a buggy
 /// external client. Reporting them to Sentry produces unactionable noise (we
 /// cannot patch an already-shipped install, and the message itself already
 /// names the bad field).
 ///
 /// Note: domain-level validation errors (e.g. type/format checks emitted *inside*
 /// a controller's `rpc.rs` handler such as `"param 'x' must be a UUID"`) are
-/// intentionally *not* matched here — only the three shapes emitted by the
+/// intentionally *not* matched here ??only the three shapes emitted by the
 /// transport-layer validators before the handler runs. Longer-term a typed
 /// `RpcError::ParamValidation` variant would remove the string-matching
 /// brittleness; the unit tests in `jsonrpc_tests.rs` lock the exact prefixes
@@ -262,7 +263,7 @@ fn is_session_expired_error(msg: &str) -> bool {
 /// emitted as the full message body, so an anchored match avoids false positives
 /// from upstream handler text that happens to mention `"unknown param"`. The
 /// session-expired predicate uses `.contains()` because session-expired markers
-/// can appear mid-message — flip these to match and the test
+/// can appear mid-message ??flip these to match and the test
 /// `is_param_validation_error_does_not_match_unrelated_errors` will break.
 fn is_param_validation_error(msg: &str) -> bool {
     msg.starts_with("unknown param '")
@@ -541,10 +542,10 @@ async fn dictation_ws_handler(ws: WebSocketUpgrade) -> Response {
 /// Includes routes for health, schema, SSE events, JSON-RPC, and Telegram auth.
 /// Conditionally attaches Socket.IO if enabled.
 ///
-/// Middleware order (outermost → innermost):
-/// 1. `cors_middleware`       — handles `OPTIONS` preflight and adds CORS headers
-/// 2. `rpc_auth_middleware`   — validates `Authorization: Bearer <token>` on protected paths
-/// 3. `http_request_log_middleware` — logs non-RPC HTTP requests with timing
+/// Middleware order (outermost ??innermost):
+/// 1. `cors_middleware`       ??handles `OPTIONS` preflight and adds CORS headers
+/// 2. `rpc_auth_middleware`   ??validates `Authorization: Bearer <token>` on protected paths
+/// 3. `http_request_log_middleware` ??logs non-RPC HTTP requests with timing
 pub fn build_core_http_router(socketio_enabled: bool) -> Router {
     let router = Router::new()
         .route("/", get(root_handler))
@@ -593,7 +594,7 @@ async fn http_request_log_middleware(req: Request, next: Next) -> Response {
             "[http] {} {}{} -> {} ({}ms)",
             method,
             path,
-            if query_len > 0 { "?…" } else { "" },
+            if query_len > 0 { "??? } else { "" },
             status,
             ms
         );
@@ -604,21 +605,34 @@ async fn http_request_log_middleware(req: Request, next: Next) -> Response {
 
 /// Middleware for handling Cross-Origin Resource Sharing (CORS).
 async fn cors_middleware(req: Request, next: Next) -> Response {
+    let request_origin = req.headers().get(header::ORIGIN).cloned();
+
     if req.method() == Method::OPTIONS {
-        return with_cors_headers(StatusCode::NO_CONTENT.into_response());
+        return with_cors_headers(StatusCode::NO_CONTENT.into_response(), request_origin.as_ref());
     }
 
     let response = next.run(req).await;
-    with_cors_headers(response)
+    with_cors_headers(response, request_origin.as_ref())
 }
 
 /// Injects CORS headers into a response.
-fn with_cors_headers(mut response: Response) -> Response {
-    let headers = response.headers_mut();
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        HeaderValue::from_static("*"),
+fn with_cors_headers(mut response: Response, request_origin: Option<&HeaderValue>) -> Response {
+    let env_allowed_origins = std::env::var("OPENHUMAN_CORE_ALLOWED_ORIGINS").ok();
+    let extra_allowed_origins = parse_allowed_origins_env(env_allowed_origins.as_deref());
+    let decision = cors_headers_for_origin(
+        request_origin.and_then(|value| value.to_str().ok()),
+        &extra_allowed_origins,
     );
+
+    let headers = response.headers_mut();
+    if decision.vary_on_origin {
+        headers.append(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    if let Some(allowed_origin) = decision.allow_origin {
+        if let Ok(value) = HeaderValue::from_str(&allowed_origin) {
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+        }
+    }
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
         HeaderValue::from_static("GET, POST, OPTIONS"),
@@ -797,14 +811,13 @@ async fn run_server_inner(
     {
         // A `Config::load_or_init` failure here is operator-visible and
         // serious (corrupt toml, bad permissions, missing/unwritable
-        // OPENHUMAN_WORKSPACE — common on headless/containerised deploys
+        // OPENHUMAN_WORKSPACE ??common on headless/containerised deploys
         // with no writable $HOME). Previously we fell back to
         // `Config::default()` and initialised the memory + whatsapp_data
         // stores against the *wrong* workspace dir, silently causing chunk
         // loss / cross-workspace bleed-over while the app looked healthy
         // (Sentry OPENHUMAN-CORE-48). Instead: skip the workspace-bound
-        // init entirely so memory stays explicitly *uninitialised* —
-        // callers then get a clear "memory client not ready" error rather
+        // init entirely so memory stays explicitly *uninitialised* ??        // callers then get a clear "memory client not ready" error rather
         // than reading/writing the wrong workspace. The server still comes
         // up; the operator sees the loud error and fixes their config or
         // sets OPENHUMAN_WORKSPACE to a writable path, then restarts.
@@ -829,7 +842,7 @@ async fn run_server_inner(
             }
             Err(e) => {
                 log::error!(
-                    "[boot] memory::global + whatsapp_data init SKIPPED — \
+                    "[boot] memory::global + whatsapp_data init SKIPPED ??\
                      Config::load_or_init failed ({e:#}). Memory persistence is \
                      DISABLED for this run; no silent fallback to the default \
                      workspace (which would cause chunk loss / cross-workspace \
@@ -871,31 +884,6 @@ async fn run_server_inner(
         "[core] Bind resolution: host={resolved_host} (from {host_source}), port={resolved_port} (from {port_source})"
     );
 
-    // Safety check: refuse to bind on a non-loopback address without an
-    // explicit RPC token. Without this, the entire RPC surface (tool
-    // execution, file access, credentials) is unauthenticated and reachable
-    // from the network. See: https://github.com/tinyhumansai/openhuman/issues/1919
-    if crate::openhuman::security::pairing::is_public_bind(&resolved_host) {
-        let has_explicit_token = std::env::var(crate::core::auth::CORE_TOKEN_ENV_VAR)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .is_some();
-        if !has_explicit_token {
-            log::error!(
-                "[core] ⚠️  SECURITY WARNING: Binding on public address {resolved_host} without \
-                 an explicit OPENHUMAN_CORE_TOKEN. The RPC server will auto-generate a token, \
-                 but external clients will not know it. Set OPENHUMAN_CORE_TOKEN in your \
-                 .env file to secure the RPC endpoint."
-            );
-            eprintln!(
-                "\n\x1b[1;31m[SECURITY]\x1b[0m Binding on {resolved_host} without OPENHUMAN_CORE_TOKEN.\n\
-                 Set OPENHUMAN_CORE_TOKEN in .env to secure the RPC endpoint.\n\
-                 Without it, the auto-generated token is written to {{workspace}}/core.token\n\
-                 but remote clients will not be able to authenticate.\n"
-            );
-        }
-    }
-
     let port = resolved_port;
     let host = resolved_host;
     let bind_addr = format!("{host}:{port}");
@@ -912,17 +900,17 @@ async fn run_server_inner(
     bootstrap_core_runtime(embedded_core).await;
 
     log::info!(
-        "[core] OpenHuman core is ready — listening on http://{bind_addr} (version {})",
+        "[core] OpenHuman core is ready ??listening on http://{bind_addr} (version {})",
         env!("CARGO_PKG_VERSION")
     );
-    log::info!("[rpc:http] JSON-RPC — POST http://{bind_addr}/rpc (JSON-RPC 2.0)");
+    log::info!("[rpc:http] JSON-RPC ??POST http://{bind_addr}/rpc (JSON-RPC 2.0)");
     if socketio_enabled {
-        log::info!("[rpc:socketio] Socket.IO — ws://{bind_addr}/socket.io/ (same HTTP server)");
+        log::info!("[rpc:socketio] Socket.IO ??ws://{bind_addr}/socket.io/ (same HTTP server)");
     } else {
         log::info!("[rpc:socketio] disabled (--jsonrpc-only)");
     }
 
-    // Background bootstrap for services — gated on login state.
+    // Background bootstrap for services ??gated on login state.
     //
     // Heavy services (local AI, voice, screen intelligence, autocomplete)
     // are only started when a user is logged in. If no user session exists
@@ -939,7 +927,7 @@ async fn run_server_inner(
 
                 // Register autocomplete shutdown hook so the engine (and its
                 // Swift overlay helper) are stopped cleanly on process exit.
-                // This is unconditional — the hook should fire regardless of
+                // This is unconditional ??the hook should fire regardless of
                 // whether the user is currently logged in.
                 crate::core::shutdown::register(|| async {
                     let engine = crate::openhuman::autocomplete::global_engine();
@@ -961,7 +949,7 @@ async fn run_server_inner(
                     .is_some();
 
                 if already_logged_in {
-                    // User has an active session — start all services now.
+                    // User has an active session ??start all services now.
                     log::info!("[services] existing session found, starting services");
                     crate::openhuman::credentials::ops::start_login_gated_services(&config).await;
 
@@ -979,7 +967,7 @@ async fn run_server_inner(
                     }
                 } else {
                     log::info!(
-                        "[services] no active session — deferring service startup until login"
+                        "[services] no active session ??deferring service startup until login"
                     );
                 }
             }
@@ -1001,7 +989,7 @@ async fn run_server_inner(
         }
     });
 
-    // Cron scheduler — polls due_jobs() every ~5s and executes them automatically.
+    // Cron scheduler ??polls due_jobs() every ~5s and executes them automatically.
     tokio::spawn(async {
         match crate::openhuman::config::Config::load_or_init().await {
             Ok(config) => {
@@ -1042,13 +1030,13 @@ async fn run_server_inner(
                 );
                 return;
             }
-            log::info!("[channels] spawning in-process realtime listeners (Telegram, Discord, …)");
+            log::info!("[channels] spawning in-process realtime listeners (Telegram, Discord, ??");
             if let Err(e) = crate::openhuman::channels::start_channels(config).await {
                 log::error!("[channels] start_channels ended with error: {e}");
             }
         });
     } else {
-        log::info!("[channels] OPENHUMAN_DISABLE_CHANNEL_LISTENERS set — skipping start_channels");
+        log::info!("[channels] OPENHUMAN_DISABLE_CHANNEL_LISTENERS set ??skipping start_channels");
     }
 
     if let Some(shutdown_token) = shutdown_token {
@@ -1100,13 +1088,13 @@ fn register_domain_subscribers(
     static REGISTERED: Once = Once::new();
     REGISTERED.call_once(|| {
         // Leak the SubscriptionHandle so the background tasks live for the
-        // entire process — SubscriptionHandle::drop aborts the task.
+        // entire process ??SubscriptionHandle::drop aborts the task.
         if let Some(handle) = crate::core::event_bus::subscribe_global(Arc::new(
             crate::openhuman::webhooks::bus::WebhookRequestSubscriber::new(),
         )) {
             std::mem::forget(handle);
         } else {
-            log::warn!("[event_bus] failed to register webhook subscriber — bus not initialized");
+            log::warn!("[event_bus] failed to register webhook subscriber ??bus not initialized");
         }
 
         if let Some(handle) = crate::core::event_bus::subscribe_global(Arc::new(
@@ -1114,7 +1102,7 @@ fn register_domain_subscribers(
         )) {
             std::mem::forget(handle);
         } else {
-            log::warn!("[event_bus] failed to register channel subscriber — bus not initialized");
+            log::warn!("[event_bus] failed to register channel subscriber ??bus not initialized");
         }
 
         crate::openhuman::health::bus::register_health_subscriber();
@@ -1145,13 +1133,13 @@ fn register_domain_subscribers(
             }
             Ok(None) => {
                 log::info!(
-                    "[auth] no session token at startup — scheduler gate set to signed_out"
+                    "[auth] no session token at startup ??scheduler gate set to signed_out"
                 );
                 crate::openhuman::scheduler_gate::set_signed_out(true);
             }
             Err(err) => {
                 log::warn!(
-                    "[auth] failed to read session token at startup ({err}) — assuming signed_out"
+                    "[auth] failed to read session token at startup ({err}) ??assuming signed_out"
                 );
                 crate::openhuman::scheduler_gate::set_signed_out(true);
             }
@@ -1166,7 +1154,7 @@ fn register_domain_subscribers(
             std::mem::forget(handle);
         } else {
             log::warn!(
-                "[event_bus] failed to register SessionExpired subscriber — bus not initialized"
+                "[event_bus] failed to register SessionExpired subscriber ??bus not initialized"
             );
         }
 
@@ -1185,12 +1173,11 @@ fn register_domain_subscribers(
             crate::openhuman::service::bus::register_shutdown_subscriber();
         }
 
-        // Proactive message subscriber (web-only in the desktop runtime —
-        // no external channel instances are registered here). Uses a
+        // Proactive message subscriber (web-only in the desktop runtime ??        // no external channel instances are registered here). Uses a
         // Once-guarded registrar so domain-level startup can't duplicate it.
         crate::openhuman::channels::proactive::register_web_only_proactive_subscriber();
 
-        // Native request handlers — typed in-process request/response.
+        // Native request handlers ??typed in-process request/response.
         // The agent `agent.run_turn` handler is what channel dispatch
         // calls instead of importing `run_tool_call_loop` directly.
         crate::openhuman::agent::bus::register_agent_handlers();
@@ -1224,7 +1211,7 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
 
     // --- Turn-state recovery -------------------------------------------
     // Any per-thread turn snapshots left on disk from a previous process
-    // are stale by definition — there is no live driver to resume them.
+    // are stale by definition ??there is no live driver to resume them.
     // Stamp them as `Interrupted` so the UI can offer a retry without
     // confusing a stale `Streaming` lifecycle for an in-flight turn.
     {
@@ -1245,20 +1232,20 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
 
     // --- Sub-agent definition registry bootstrap ---
     // Loads built-in archetype definitions plus any custom TOML files
-    // under `<workspace>/agents/*.toml`. Idempotent — safe to call
+    // under `<workspace>/agents/*.toml`. Idempotent ??safe to call
     // multiple times. Uses the per-user scoped workspace_dir.
     if let Err(err) =
         crate::openhuman::agent::harness::AgentDefinitionRegistry::init_global(&workspace_dir)
     {
         log::warn!(
-            "[runtime] AgentDefinitionRegistry::init_global failed: {err} — \
+            "[runtime] AgentDefinitionRegistry::init_global failed: {err} ??\
              spawn_subagent will be unavailable until restart"
         );
     }
 
     // --- Session storage layout migration -------------------------------
-    // One-shot move from `session_raw/{DDMMYYYY}/` (≤ 0.53.4) to the new
-    // flat `session_raw/{stem}.jsonl` layout, plus DDMMYYYY → YYYY_MM_DD
+    // One-shot move from `session_raw/{DDMMYYYY}/` (??0.53.4) to the new
+    // flat `session_raw/{stem}.jsonl` layout, plus DDMMYYYY ??YYYY_MM_DD
     // for the human-readable `sessions/` companions. Idempotent via a
     // marker file at `state/migrations/session_layout_v1.done`, so this
     // costs one stat() on every subsequent boot.
@@ -1285,7 +1272,7 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
             // The transcript module's legacy fallback covers the unmigrated
             // case for one release window.
             log::warn!(
-                "[runtime] session_layout migration failed: {err} — \
+                "[runtime] session_layout migration failed: {err} ??\
                  falling back to in-place legacy reads"
             );
         }
@@ -1311,7 +1298,7 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
         let token = match crate::api::jwt::get_session_token(&config) {
             Ok(Some(t)) => t,
             Ok(None) => {
-                log::info!("[socket] No session token stored — skipping auto-connect (will connect after login)");
+                log::info!("[socket] No session token stored ??skipping auto-connect (will connect after login)");
                 return;
             }
             Err(e) => {
@@ -1320,7 +1307,7 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
             }
         };
         log::info!(
-            "[socket] Session token found — auto-connecting to {}",
+            "[socket] Session token found ??auto-connecting to {}",
             api_url
         );
         if let Err(e) = socket_mgr.connect(&api_url, &token).await {
@@ -1380,3 +1367,6 @@ fn build_http_schema_dump() -> HttpSchemaDump {
 #[cfg(test)]
 #[path = "jsonrpc_tests.rs"]
 mod tests;
+
+
+

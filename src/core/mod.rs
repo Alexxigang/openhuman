@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn method_name_is_not_an_rpc_method_name() {
         // The dotted controller key and the `openhuman.<ns>_<fn>` RPC method
-        // name are intentionally different — guard against drift.
+        // name are intentionally different ??guard against drift.
         let s = mk("memory", "doc_put");
         assert_eq!(s.method_name(), "memory.doc_put");
         assert_eq!(
@@ -230,3 +230,4 @@ mod tests {
         assert_eq!(json["outputs"][0]["required"], true);
     }
 }
+
